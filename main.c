@@ -1,98 +1,144 @@
+#include <windows.h>
+#include <winsock2.h>
+#include <gdiplus.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <netinet/in.h>
+#include <stdint.h>
 #include <jpeglib.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
+#include <io.h>
 
-#define PORT 8080
-#define BUF_SIZE 4096
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "gdi32.lib")
 
-void error(const char *msg) {
-    perror(msg);
-    exit(1);
+ULONG_PTR gdiplusToken;
+
+void save_jpeg(const char *filename, HBITMAP hBitmap) {
+    BITMAP bmp;
+    GetObject(hBitmap, sizeof(BITMAP), &bmp);
+    BITMAPINFOHEADER bi = { 0 };
+    bi.biSize = sizeof(BITMAPINFOHEADER);
+    bi.biWidth = bmp.bmWidth;
+    bi.biHeight = -bmp.bmHeight;
+    bi.biPlanes = 1;
+    bi.biBitCount = 24;
+    bi.biCompression = BI_RGB;
+
+    BYTE *pPixels = (BYTE*)malloc(bmp.bmWidth * 3 * bmp.bmHeight);
+    GetDIBits(GetDC(0), hBitmap, 0, bmp.bmHeight, pPixels, (BITMAPINFO*)&bi, DIB_RGB_COLORS);
+
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    FILE *outfile = fopen(filename, "wb");
+    if (!outfile) {
+        free(pPixels);
+        return;
+    }
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+    jpeg_stdio_dest(&cinfo, outfile);
+
+    cinfo.image_width = bmp.bmWidth;
+    cinfo.image_height = bmp.bmHeight;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    jpeg_set_defaults(&cinfo);
+    jpeg_start_compress(&cinfo, TRUE);
+
+    JSAMPROW row_pointer[1];
+    int row_stride = bmp.bmWidth * 3;
+    while (cinfo.next_scanline < cinfo.image_height) {
+        row_pointer[0] = &pPixels[cinfo.next_scanline * row_stride];
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    jpeg_finish_compress(&cinfo);
+    fclose(outfile);
+    jpeg_destroy_compress(&cinfo);
+    free(pPixels);
 }
 
-void capture_screen(char *filename) {
-    char command[BUF_SIZE];
-    snprintf(command, sizeof(command), "ffmpeg -f x11grab -y -video_size cif -i :0.0 -vframes 1 %s", filename);
-    system(command);
+void capture_screenshot(const char *filename) {
+    HDC hdc = GetDC(NULL);
+    HDC hDest = CreateCompatibleDC(hdc);
+    RECT rc;
+    GetClientRect(GetDesktopWindow(), &rc);
+    HBITMAP hbDesktop = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+    SelectObject(hDest, hbDesktop);
+    BitBlt(hDest, 0, 0, rc.right, rc.bottom, hdc, 0, 0, SRCCOPY);
+    save_jpeg(filename, hbDesktop);
+    DeleteObject(hbDesktop);
+    DeleteDC(hDest);
+    ReleaseDC(NULL, hdc);
 }
 
-void send_mjpeg_stream(int client_sock) {
-    char buffer[BUF_SIZE];
-    FILE *file;
-
-    write(client_sock, "HTTP/1.0 200 OK\r\n", 17);
-    write(client_sock, "Content-Type: multipart/x-mixed-replace;boundary=boundary\r\n", 59);
-    write(client_sock, "\r\n", 2);
+void handle_client(SOCKET client_socket) {
+    const char header[] = "HTTP/1.1 200 OK\r\n"
+                          "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                          "\r\n";
+    send(client_socket, header, sizeof(header) - 1, 0);
 
     while (1) {
-        capture_screen("screen.jpg");
-        file = fopen("screen.jpg", "rb");
-        if (file == NULL) {
-            error("ERROR opening file");
-        }
+        capture_screenshot("screenshot.jpg");
 
+        FILE *file = fopen("screenshot.jpg", "rb");
         fseek(file, 0, SEEK_END);
         long file_size = ftell(file);
         fseek(file, 0, SEEK_SET);
 
-        snprintf(buffer, sizeof(buffer), "--boundary\r\nContent-Type: image/jpeg\r\nContent-Length: %ld\r\n\r\n", file_size);
-        write(client_sock, buffer, strlen(buffer));
-
-        while (file_size > 0) {
-            int bytes_read = fread(buffer, 1, sizeof(buffer), file);
-            write(client_sock, buffer, bytes_read);
-            file_size -= bytes_read;
-        }
-
-        write(client_sock, "\r\n", 2);
+        char *file_buffer = (char*)malloc(file_size);
+        fread(file_buffer, 1, file_size, file);
         fclose(file);
-        usleep(100000); // 延迟以减少CPU使用率
+
+        char frame_header[100];
+        int frame_header_len = sprintf(frame_header, "--frame\r\n"
+                                                     "Content-Type: image/jpeg\r\n"
+                                                     "Content-Length: %ld\r\n\r\n", file_size);
+        send(client_socket, frame_header, frame_header_len, 0);
+        send(client_socket, file_buffer, file_size, 0);
+        free(file_buffer);
+
+        Sleep(100);
     }
 }
 
 int main() {
-    int sockfd, newsockfd, portno;
-    socklen_t clilen;
-    struct sockaddr_in serv_addr, cli_addr;
+    // Initialize GDI+
+    GdiplusStartupInput gdiplusStartupInput;
+    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
-    printf("请输入端口号: ");
-    scanf("%d", &portno);
+    // Initialize Winsock
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        error("ERROR opening socket");
+    // Create socket
+    SOCKET server_socket = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in server_addr = { 0 };
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    printf("请输入端口号：");
+    int port;
+    scanf("%d", &port);
+    server_addr.sin_port = htons(port);
+
+    bind(server_socket, (struct sockaddr*)&server_addr, sizeof(server_addr));
+    listen(server_socket, 3);
+
+    printf("Server listening on port %d\n", port);
+
+    // Handle client connections
+    while (1) {
+        SOCKET client_socket = accept(server_socket, NULL, NULL);
+        if (client_socket != INVALID_SOCKET) {
+            handle_client(client_socket);
+            closesocket(client_socket);
+        }
     }
 
-    memset((char *)&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
-    serv_addr.sin_port = htons(portno);
+    // Cleanup
+    closesocket(server_socket);
+    WSACleanup();
+    GdiplusShutdown(gdiplusToken);
 
-    if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        error("ERROR on binding");
-    }
-
-    listen(sockfd, 5);
-    clilen = sizeof(cli_addr);
-
-    printf("等待客户端连接...\n");
-
-    newsockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
-    if (newsockfd < 0) {
-        error("ERROR on accept");
-    }
-
-    printf("客户端已连接: %s\n", inet_ntoa(cli_addr.sin_addr));
-
-    send_mjpeg_stream(newsockfd);
-
-    close(newsockfd);
-    close(sockfd);
     return 0;
 }
