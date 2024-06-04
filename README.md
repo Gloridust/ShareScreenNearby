@@ -27,7 +27,7 @@ cd ShareScreenNearby
 2. 运行程序：
 
 ```bash
-python main.py
+python ShareScreenNearby.py
 ```
 
 3. 根据提示输入端口号和路径，例如：
@@ -52,7 +52,7 @@ pip install pyinstaller
 2. 在项目根目录下运行以下命令：
 
 ```bash
-pyinstaller --onefile --noconsole --icon=./src/logo-r.webp main.py
+pyinstaller --onefile --icon=./src/logo-r.webp ShareScreenNearby.py
 ```
 
 此命令会在 `dist` 文件夹中生成一个名为 `ShareScreenNearby.exe` 的可执行文件。
@@ -66,7 +66,7 @@ ShareScreenNearby/
 │
 ├── src/
 │   └── logo-r.webp
-├── main.py
+├── ShareScreenNearby.py
 └── README.md
 ```
 
