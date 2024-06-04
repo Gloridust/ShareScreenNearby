@@ -2,6 +2,8 @@
 
 ShareScreenNearby 是一个用于在局域网内共享屏幕内容的 Python 程序。通过该程序，用户可以在局域网内的其他设备上，通过浏览器查看本机屏幕内容。
 
+目前由Python开发，C语言版本还在实验性阶段。
+
 <p align="center">
   <a href="#">
     <img width="180" src="./src/logo-r.webp">
