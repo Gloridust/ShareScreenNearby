@@ -10,6 +10,8 @@ ShareScreenNearby 是一个用于在局域网内共享屏幕内容的 Python 程
   </a>
 </p>
 <h2 align="center">ShareScreenNearby</h2>
+<div align="center"><p><a href="./README.md">简体中文</a>|<a href="./README_EN.md">English(US)</a></p></div>
+
 
 ## 功能介绍
 
