@@ -9,7 +9,7 @@ ShareScreenNearby 是一个用于在局域网内共享屏幕内容的 Python 程
     <img width="180" src="./src/logo-r.webp">
   </a>
 </p>
-<h1 align="center">ShareScreenNearby</h1>
+<h2 align="center">ShareScreenNearby</h2>
 
 ## 功能介绍
 
